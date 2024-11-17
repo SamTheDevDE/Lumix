@@ -1,101 +1,110 @@
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
-
-fn print_help() {
-    println!("Usage: ./lumix.exe -c <source_file.rs> <output_file_name> [--bin-dir=<custom_directory>]");
-    println!();
-    println!("Options:");
-    println!("  -c, --compile          Compile the Rust source file");
-    println!("  --bin-dir=<dir>        Specify a custom directory for the compiled binary (default is './bin')");
-    println!("  -h, --help             Display this help menu");
-}
+use clap::{Arg, Command};
+use std::{env, fs};
+use std::process::{Command as ProcessCommand};
 
 fn main() {
-    // Parse CLI arguments
-    let args: Vec<String> = env::args().collect();
+    let matches = Command::new("Lumix")
+        .version("1.0")
+        .author("Your Name")
+        .about("A CLI tool for compiling Rust projects")
+        .arg(Arg::new("compile")
+            .short('c')
+            .long("compile")
+            .value_parser(clap::value_parser!(String))
+            .help("Path to the source file or directory to compile"))
+        .arg(Arg::new("output")
+            .short('o')
+            .long("output")
+            .value_parser(clap::value_parser!(String))
+            .default_value("lumix") // This now uses a string literal
+            .help("Name of the output file"))
+        .arg(Arg::new("bin-dir")
+            .long("bin-dir")
+            .value_parser(clap::value_parser!(String))
+            .default_value("./bin") // This also uses a string literal
+            .help("Directory to output the compiled binary"))
+        .arg(Arg::new("release")
+            .short('r')
+            .long("release")
+            .help("Compile in release mode"))
+        .arg(Arg::new("target")
+            .long("target")
+            .value_parser(clap::value_parser!(String))
+            .help("Specify the target architecture"))
+        .arg(Arg::new("features")
+            .long("features")
+            .value_parser(clap::value_parser!(String))
+            .help("Specify features to enable during the build"))
+        .arg(Arg::new("verbose")
+            .short('v')
+            .long("verbose")
+            .action(clap::ArgAction::Count)
+            .help("Increase verbosity of output (use multiple times for more verbosity)"))
+        .arg(Arg::new("command")
+            .long("command")
+            .value_parser(clap::value_parser!(String))
+            .default_value("build")
+            .help("Specify the cargo command to use (e.g., build, clean, test)"))
+        .get_matches();
 
-    // Check if help flag is passed
-    if args.contains(&String::from("-h")) || args.contains(&String::from("--help")) {
-        print_help();
-        return;
+    // Retrieve arguments safely
+    let file = matches.get_one::<String>("compile").unwrap_or_else(|| {
+        eprintln!("Error: 'compile' argument is required.");
+        std::process::exit(1);
+    });
+
+    // Use unwrap_or_else to provide default values for "output" and "bin-dir"
+    let output = matches.get_one::<String>("output").map(|s| s.clone()).unwrap_or_else(|| "lumix".to_string());
+    let bin_dir = matches.get_one::<String>("bin-dir").map(|s| s.clone()).unwrap_or_else(|| "./bin".to_string());
+
+    let release = matches.get_flag("release");
+    let target = matches.get_one::<String>("target");
+    let features = matches.get_one::<String>("features");
+    let verbose = matches.get_count("verbose");
+    let command = matches.get_one::<String>("command").unwrap();
+
+    // Ensure the output directory exists
+    fs::create_dir_all(bin_dir.clone()).unwrap(); // Clone bin_dir here to avoid moving it
+
+    // Determine the build mode
+    let mode = if release { "--release" } else { "" };
+
+    // Verbosity adjustment
+    let verbosity = match verbose {
+        0 => "--quiet",  // No verbosity
+        1 => "--verbose",  // Standard verbosity
+        _ => "--verbose --verbose",  // Maximum verbosity
+    };
+
+    // Build the cargo command
+    let mut cargo_command = ProcessCommand::new("cargo");
+
+    // Add the custom command (build, clean, test)
+    cargo_command.arg(command);
+
+    // Add the optional target architecture
+    if let Some(target_arch) = target {
+        cargo_command.arg("--target").arg(target_arch);
     }
 
-    // Check if there are enough arguments
-    if args.len() < 4 {
-        println!("Usage: ./lumix.exe -c <source_file.rs> <output_file_name> [--bin-dir=<custom_directory>]");
-        return;
+    // Add features if specified
+    if let Some(feature_list) = features {
+        cargo_command.arg("--features").arg(feature_list);
     }
 
-    let mut bin_dir = Path::new("./bin"); // Default output directory
+    // Add verbosity level
+    cargo_command.arg(verbosity);
 
-    // Look for --bin-dir flag
-    if let Some(bin_dir_arg) = args.iter().find(|arg| arg.starts_with("--bin-dir=")) {
-        if let Some(custom_dir) = bin_dir_arg.split_once('=') {
-            bin_dir = Path::new(custom_dir.1); // Set to custom directory from the flag
-        }
-    }
+    // Add other necessary arguments
+    cargo_command.arg(mode).arg("--bin").arg(output.clone()).current_dir(file); // Clone output here as well
 
-    // Check if -c (compile) flag is present
-    if args.contains(&String::from("-c")) || args.contains(&String::from("--compile")) {
-        // Get the source file and output file name from the arguments
-        let source_file = args.get(2).unwrap();  // The Rust source file
-        let output_file = args.get(3).unwrap();  // The output file (compiled binary)
+    // Execute the command and handle the result
+    let status = cargo_command.status().expect("Failed to execute cargo command");
 
-        // Make sure the bin directory exists (or create it if it doesn't)
-        if !bin_dir.exists() {
-            match fs::create_dir_all(bin_dir) {
-                Ok(_) => println!("Created directory: {:?}", bin_dir),
-                Err(e) => {
-                    eprintln!("Failed to create directory: {}", e);
-                    return;
-                }
-            }
-        }
-
-        // Construct the full path for the output file
-        let output_path: PathBuf = bin_dir.join(output_file);
-
-        println!(
-            "Compiling Rust source: {} to output file: {:?}",
-            source_file,
-            output_path
-        );
-
-        // Start timer
-        let start_time = Instant::now();
-
-        // Execute the rustc command to compile the Rust source file
-        let output = Command::new("rustc")
-            .arg(source_file) // The Rust source file to compile
-            .arg("-o") // The output flag
-            .arg(output_path.to_str().unwrap()) // The full output file path
-            .output();
-
-        // Stop timer
-        let duration = start_time.elapsed();
-
-        // Handle output
-        match output {
-            Ok(output) => {
-                if !output.stderr.is_empty() {
-                    eprintln!(
-                        "Error during compilation: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                } else {
-                    println!("Done.");
-                    println!("{}", String::from_utf8_lossy(&output.stdout));
-                    println!("Compilation completed in {:.2} seconds.", duration.as_secs_f64());
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to execute rustc: {}", e);
-            }
-        }
+    if !status.success() {
+        eprintln!("Error during compilation.");
     } else {
-        println!("Run './lumix.exe --help' to see available options.");
+        println!("Compilation successful!");
+        println!("Binary saved to {}/{}", bin_dir, output); // This works now because we cloned bin_dir and output
     }
 }
