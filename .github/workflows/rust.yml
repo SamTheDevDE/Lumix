@@ -1,0 +1,41 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - main  # Trigger on push to the main branch
+  pull_request:
+    branches:
+      - main  # Trigger on pull request to the main branch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # Use the latest Ubuntu runner
+
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Rust toolchain
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+        with:
+          rust-version: stable  # You can specify the Rust version here
+
+      # Step 3: Install dependencies (if any) and build the project
+      - name: Build the project
+        run: |
+          rustc src/main.rs -o lumix  # Compile the project using rustc
+
+      # Step 4: Run tests (optional, if you have tests in your project)
+      - name: Run tests
+        run: |
+          cargo test  # This step assumes you have tests. You can skip if not necessary.
+
+      # Step 5: Optionally, run additional commands (e.g., linters, formatters)
+      # - name: Run additional checks
+      #   run: |
+      #     cargo fmt -- --check  # Run rustfmt to check code formatting
+      #     cargo clippy -- -D warnings  # Run clippy to check for lints and warnings
+
